@@ -56,7 +56,8 @@ jobs:
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USERNAME }}
-          key: ${{ secrets.TENCENT_SSH_KEY }}
+          # key: ${{ secrets.TENCENT_SSH_KEY }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
           script: |
             # 1. Pull latest code
             # 注意：首次部署需先手动 clone: git clone https://github.com/<USER>/GlobalPulse.git /var/www/globalpulse_app
