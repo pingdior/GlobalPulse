@@ -6,82 +6,81 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Backend Test
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install Backend Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-          
-      # Frontend Build
+      # 1. Setup & Build Frontend
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           
-      - name: Install Frontend Dependencies
+      - name: Install & Build Frontend
         run: |
           cd frontend
           flutter pub get
-          
-      - name: Build Flutter Web
-        run: |
-          cd frontend
           flutter build web --release
 
-  deploy:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    steps:
-      - uses: actions/checkout@v4
-      
-      # Example: Deploy via SSH to Tencent Cloud CVM
-      # You need to configure secrets in GitHub Repo Settings:
-      # TENCENT_HOST: Your server IP
-      # TENCENT_USERNAME: 'root' or 'ubuntu'
-      # TENCENT_SSH_KEY: Your private SSH key
-      
-      - name: Deploy to Tencent Cloud
+      # 2. Deploy Files via SCP
+      - name: Copy Files to Server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USERNAME }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
+          # Copy built web files AND backend code
+          source: "frontend/build/web/*,backend/*,deploy/nginx.conf,backend/.env.example,backend/requirements.txt"
+          target: "/var/www/globalpulse_temp"
+          strip_components: 0
+
+      # 3. Configure & Restart via SSH
+      - name: Remote Configuration & Restart
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USERNAME }}
-          # key: ${{ secrets.TENCENT_SSH_KEY }}
           password: ${{ secrets.TENCENT_PASSWORD }}
           script: |
-            # 1. Pull latest code
-            # 注意：首次部署需先手动 clone: git clone https://github.com/<USER>/GlobalPulse.git /var/www/globalpulse_app
-            cd /var/www/globalpulse_app
-            git pull origin main
+            # --- Organization ---
+            # Move Frontend Files
+            rm -rf /var/www/globalpulse/web/*
+            mkdir -p /var/www/globalpulse/web
+            cp -r /var/www/globalpulse_temp/frontend/build/web/* /var/www/globalpulse/web/
             
-            # 2. Setup Backend
-            cd backend
-            # Inject Secret from GitHub to .env file
+            # Move Backend Files
+            mkdir -p /var/www/globalpulse/backend
+            cp -r /var/www/globalpulse_temp/backend/* /var/www/globalpulse/backend/
+            
+            # --- Nginx Setup ---
+            cp /var/www/globalpulse_temp/deploy/nginx.conf /etc/nginx/conf.d/globalpulse.conf
+            # Disable default config if exists (CentOS generic)
+            mv /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf.bak || true
+            
+            # Restart Nginx
+            nginx -t && systemctl reload nginx || systemctl restart nginx
+
+            # --- Backend Setup ---
+            cd /var/www/globalpulse/backend
+            
+            # Inject Secret
             echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" > .env
             
+            # Virtualenv
+            if [ ! -d "venv" ]; then
+                python3 -m venv venv
+            fi
             source venv/bin/activate
             pip install -r requirements.txt
             
-            # Restart Backend Service (Assuming using pm2 or systemd)
-            # pm2 restart globalpulse-api || pm2 start "uvicorn app.main:app --host 127.0.0.1 --port 8000" --name globalpulse-api
+            # Stop existing uvicorn (Simple kill for demo)
+            pkill -f "uvicorn app.main:app" || true
             
-            # 3. Deploy Frontend
-            # 将构建好的前端文件 (你需要先在 CI 中通过 scp 传过来，或者在服务器上构建)
-            # 简单起见，这里假设我们在服务器上直接构建 (如果服务器性能允许)
-            cd ../frontend
-            # flutter build web --release  # 如果服务器有 Flutter 环境
+            # Start Backend (nohup for background)
+            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
             
-            # 或者：如果是在 CI 机器上构建的，你需要使用 appleboy/scp-action 先把 build/web 传到服务器
-            # scp -r build/web/* /var/www/globalpulse/web/
+            # Cleanup
+            rm -rf /var/www/globalpulse_temp
             
-            echo "Deployment finished. Ensure Nginx is reloaded if config changed."
+            echo "✅ Deployment Complete!"
