@@ -58,18 +58,29 @@ jobs:
           username: ${{ secrets.TENCENT_USERNAME }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
-            # Pull latest changes
-            cd /path/to/your/project
+            # 1. Pull latest code
+            # 注意：首次部署需先手动 clone: git clone https://github.com/<USER>/GlobalPulse.git /var/www/globalpulse_app
+            cd /var/www/globalpulse_app
             git pull origin main
             
-            # Backend: Restart Service (Example with restart script or docker)
+            # 2. Setup Backend
             cd backend
+            # Inject Secret from GitHub to .env file
+            echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" > .env
+            
             source venv/bin/activate
             pip install -r requirements.txt
-            # restart your systemd service or pm2 or docker container
-            # systemctl restart globalpulse-backend
             
-            # Frontend: Update web files (Example: copy build artifacts)
-            # You might need to SCP the 'build/web' folder if you prefer building on CI
-            # For this example, we assume you might just build on server or host static files
-            echo "Deployment script executed!"
+            # Restart Backend Service (Assuming using pm2 or systemd)
+            # pm2 restart globalpulse-api || pm2 start "uvicorn app.main:app --host 127.0.0.1 --port 8000" --name globalpulse-api
+            
+            # 3. Deploy Frontend
+            # 将构建好的前端文件 (你需要先在 CI 中通过 scp 传过来，或者在服务器上构建)
+            # 简单起见，这里假设我们在服务器上直接构建 (如果服务器性能允许)
+            cd ../frontend
+            # flutter build web --release  # 如果服务器有 Flutter 环境
+            
+            # 或者：如果是在 CI 机器上构建的，你需要使用 appleboy/scp-action 先把 build/web 传到服务器
+            # scp -r build/web/* /var/www/globalpulse/web/
+            
+            echo "Deployment finished. Ensure Nginx is reloaded if config changed."
